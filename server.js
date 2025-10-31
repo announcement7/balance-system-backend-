@@ -14,16 +14,13 @@ const PORT = process.env.PORT || 3000;
 // Firestore / Admin setup
 // -----------------------------
 function initFirebaseAdmin() {
-  // Try to initialize from environment variables
   try {
     const projectId = process.env.FIREBASE_PROJECT_ID;
     const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
     let privateKey = process.env.FIREBASE_PRIVATE_KEY;
 
     if (projectId && clientEmail && privateKey) {
-      // If the key was stored with literal \n, convert to newlines
       privateKey = privateKey.includes("\\n") ? privateKey.replace(/\\n/g, "\n") : privateKey;
-
       admin.initializeApp({
         credential: admin.credential.cert({
           projectId,
@@ -31,7 +28,6 @@ function initFirebaseAdmin() {
           privateKey,
         }),
       });
-
       console.log("✅ Firebase Admin initialized from environment variables.");
       return;
     }
@@ -39,19 +35,18 @@ function initFirebaseAdmin() {
     console.warn("⚠️ Firebase env init failed:", err.message);
   }
 
-  // Fallback to local serviceAccountKey.json (useful for local dev)
   const localKeyPath = path.join(__dirname, "serviceAccountKey.json");
   if (fs.existsSync(localKeyPath)) {
     const serviceAccount = require(localKeyPath);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
-    console.log("✅ Firebase Admin initialized from serviceAccountKey.json (local fallback).");
+    console.log("✅ Firebase Admin initialized from local serviceAccountKey.json.");
     return;
   }
 
   console.error("❌ Firebase Admin initialization failed — no credentials found.");
-  process.exit(1); // fatal
+  process.exit(1);
 }
 
 initFirebaseAdmin();
@@ -61,7 +56,6 @@ const db = admin.firestore();
 // Middleware
 // -----------------------------
 app.use(bodyParser.json());
-
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "https://balancesystemfrontend.onrender.com";
 app.use(
   cors({
@@ -84,16 +78,13 @@ function formatPhone(phone) {
 
 function swiftWalletHeaders() {
   const token = process.env.SWIFTWALLET_API_KEY;
-  if (!token) {
-    throw new Error("SWIFTWALLET_API_KEY not set in environment");
-  }
+  if (!token) throw new Error("SWIFTWALLET_API_KEY not set in environment");
   return {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
   };
 }
 
-// Useful logger for axios errors
 function axiosErrorToObject(err) {
   if (!err) return { message: "Unknown error" };
   return {
@@ -107,7 +98,7 @@ function axiosErrorToObject(err) {
 // Routes
 // -----------------------------
 
-// 1) /pay - existing loan payment endpoint (keeps similarity with original)
+// 1️⃣ /pay (loan payments)
 app.post("/pay", async (req, res) => {
   try {
     const { phone, amount, loan_amount } = req.body;
@@ -121,12 +112,12 @@ app.post("/pay", async (req, res) => {
       phone_number: formattedPhone,
       external_reference: reference,
       customer_name: "Customer",
-      callback_url: `${process.env.BACKEND_PUBLIC_URL || `https://balancesystembackend.onrender.com`}/callback`,
+      callback_url: `${process.env.BACKEND_PUBLIC_URL || "https://balancesystembackend.onrender.com"}/callback`,
       channel_id: "000205",
     };
 
     const url = "https://swiftwallet.co.ke/pay-app-v2/payments.php";
-    console.log("📤 /pay -> sending to SwiftWallet", { reference, payload });
+    console.log("📤 /pay -> sending to SwiftWallet", payload);
 
     let resp;
     try {
@@ -135,16 +126,18 @@ app.post("/pay", async (req, res) => {
     } catch (err) {
       const e = axiosErrorToObject(err);
       console.error("❌ SwiftWallet /pay error:", e);
-      // Return API error to frontend for debugging (non-sensitive)
       return res.status(502).json({ success: false, error: "STK push failed", details: e });
     }
 
     if (resp.data && resp.data.success) {
-      // Save to legacy receipts.json (optional)
       const receiptsFile = path.join(__dirname, "receipts.json");
       let receipts = {};
       if (fs.existsSync(receiptsFile)) {
-        try { receipts = JSON.parse(fs.readFileSync(receiptsFile)); } catch (_) { receipts = {}; }
+        try {
+          receipts = JSON.parse(fs.readFileSync(receiptsFile));
+        } catch {
+          receipts = {};
+        }
       }
       const receiptData = {
         reference,
@@ -158,7 +151,6 @@ app.post("/pay", async (req, res) => {
       };
       receipts[reference] = receiptData;
       fs.writeFileSync(receiptsFile, JSON.stringify(receipts, null, 2));
-
       return res.json({ success: true, message: "STK push sent", reference, receipt: receiptData });
     } else {
       console.warn("/pay -> SwiftWallet responded with success=false", resp.data);
@@ -170,7 +162,7 @@ app.post("/pay", async (req, res) => {
   }
 });
 
-// 2) /callback - loan payment callback (legacy receipts update)
+// 2️⃣ /callback (loan payments callback)
 app.post("/callback", async (req, res) => {
   try {
     const data = req.body;
@@ -180,10 +172,13 @@ app.post("/callback", async (req, res) => {
     const receiptsFile = path.join(__dirname, "receipts.json");
     let receipts = {};
     if (fs.existsSync(receiptsFile)) {
-      try { receipts = JSON.parse(fs.readFileSync(receiptsFile)); } catch (_) { receipts = {}; }
+      try {
+        receipts = JSON.parse(fs.readFileSync(receiptsFile));
+      } catch {
+        receipts = {};
+      }
     }
     const existingReceipt = receipts[ref] || {};
-
     const status = (data.status || "").toLowerCase();
     const resultCode = data.result?.ResultCode;
 
@@ -219,10 +214,7 @@ app.post("/callback", async (req, res) => {
         case 2001:
           statusNote = "Insufficient balance.";
           break;
-        default:
-          break;
       }
-
       receipts[ref] = {
         reference: ref,
         transaction_id: data.transaction_id,
@@ -235,7 +227,6 @@ app.post("/callback", async (req, res) => {
         timestamp: new Date().toISOString(),
       };
     }
-
     fs.writeFileSync(receiptsFile, JSON.stringify(receipts, null, 2));
     return res.json({ ResultCode: 0, ResultDesc: "Success" });
   } catch (err) {
@@ -244,7 +235,7 @@ app.post("/callback", async (req, res) => {
   }
 });
 
-// 3) /deposit - start wallet deposit (sends STK push and writes a pending deposit into Firestore)
+// 3️⃣ /deposit (SwiftWallet v3)
 app.post("/deposit", async (req, res) => {
   try {
     const { userId, phone, amount } = req.body;
@@ -256,16 +247,16 @@ app.post("/deposit", async (req, res) => {
 
     const reference = "DEPOSIT-" + Date.now();
     const payload = {
-      amount: Math.round(amount),
+      action: "deposit",
+      wallet_type: "payments",
       phone_number: formattedPhone,
-      external_reference: reference,
-      customer_name: "Wallet Deposit",
-      callback_url: `${process.env.BACKEND_PUBLIC_URL || `https://balancesystembackend.onrender.com`}/deposit-callback`,
-      channel_id: "000205",
+      amount: Math.round(amount),
+      user_callback_url: `${process.env.BACKEND_PUBLIC_URL || "https://balancesystembackend.onrender.com"}/deposit-callback`,
     };
 
-    const url = "https://swiftwallet.co.ke/pay-app-v2/payments.php";
-    console.log("📤 /deposit sending to SwiftWallet", { reference, payload });
+    const url = "https://swiftwallet.co.ke/pay-app/v3/wallet/";
+
+    console.log("📤 /deposit sending to SwiftWallet", payload);
 
     let resp;
     try {
@@ -274,7 +265,6 @@ app.post("/deposit", async (req, res) => {
     } catch (err) {
       const e = axiosErrorToObject(err);
       console.error("❌ SwiftWallet /deposit error:", e);
-      // Save pending deposit anyway (to allow manual reconciliation) and return error details
       await db.collection("deposits").doc(reference).set({
         userId,
         phone: formattedPhone,
@@ -288,7 +278,6 @@ app.post("/deposit", async (req, res) => {
       return res.status(502).json({ success: false, error: "Deposit initiation failed", details: e });
     }
 
-    // If SwiftWallet accepted the request (even if pending), create deposit doc with pending
     await db.collection("deposits").doc(reference).set({
       userId,
       phone: formattedPhone,
@@ -300,24 +289,26 @@ app.post("/deposit", async (req, res) => {
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    return res.json({ success: true, reference, message: "STK push sent. Check your phone.", swift_response: resp.data });
+    return res.json({
+      success: true,
+      reference,
+      message: "STK push sent. Check your phone.",
+      swift_response: resp.data,
+    });
   } catch (err) {
     console.error("Deposit initiation error:", err);
     return res.status(500).json({ error: "Deposit failed.", details: err.message });
   }
 });
 
-// 4) /deposit-callback - called by SwiftWallet when user completes/cancels STK push
+// 4️⃣ /deposit-callback
 app.post("/deposit-callback", async (req, res) => {
   try {
     const data = req.body;
     console.log("📩 /deposit-callback received:", JSON.stringify(data).slice(0, 2000));
 
     const ref = data.external_reference;
-    if (!ref) {
-      console.warn("deposit-callback missing external_reference");
-      return res.status(400).json({ error: "external_reference missing" });
-    }
+    if (!ref) return res.status(400).json({ error: "external_reference missing" });
 
     const resultCode = data.result?.ResultCode;
     const success = (data.status === "completed" && data.success === true) || resultCode === 0;
@@ -334,20 +325,14 @@ app.post("/deposit-callback", async (req, res) => {
       depositStatus = "timeout";
       note = "Deposit timed out.";
     } else {
-      // Use provided result description if available
       note = data.result?.ResultDesc || note;
     }
 
     const depositRef = db.collection("deposits").doc(ref);
     const depositSnap = await depositRef.get();
-    if (!depositSnap.exists) {
-      console.error("❌ deposit-callback unknown reference:", ref);
-      return res.status(404).json({ error: "Reference not found" });
-    }
+    if (!depositSnap.exists) return res.status(404).json({ error: "Reference not found" });
 
     const depositData = depositSnap.data();
-
-    // Update deposit doc
     await depositRef.update({
       status: depositStatus,
       note,
@@ -355,12 +340,10 @@ app.post("/deposit-callback", async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // If success -> update user balance
     if (depositStatus === "success") {
       const userRef = db.collection("users").doc(depositData.userId);
       const userSnap = await userRef.get();
       const currentBalance = userSnap.exists ? userSnap.data().balance || 0 : 0;
-
       await userRef.set(
         {
           balance: currentBalance + (depositData.amount || 0),
@@ -369,7 +352,6 @@ app.post("/deposit-callback", async (req, res) => {
         },
         { merge: true }
       );
-
       console.log(`✅ Balance updated for user ${depositData.userId}: +${depositData.amount}`);
     } else {
       console.log(`⚠️ Deposit ${ref} status updated to ${depositStatus}: ${note}`);
@@ -382,7 +364,7 @@ app.post("/deposit-callback", async (req, res) => {
   }
 });
 
-// 5) Get user + transactions
+// 5️⃣ /user/:userId
 app.get("/user/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
@@ -409,7 +391,5 @@ app.get("/user/:userId", async (req, res) => {
 // Health check
 app.get("/", (req, res) => res.send({ ok: true, ts: new Date().toISOString() }));
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+// 🚀 Start
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
