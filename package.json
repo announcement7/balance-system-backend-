@@ -25,11 +25,12 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "firebase-admin": "^12.1.0",
-    "pdfkit": "^0.13.0",
-    "path": "^0.12.7",
-    "fs": "^0.0.1-security"
+    "pdfkit": "^0.13.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
