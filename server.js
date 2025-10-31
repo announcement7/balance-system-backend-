@@ -65,7 +65,7 @@ app.post("/pay", async (req, res) => {
       phone_number: formattedPhone,
       external_reference: reference,
       customer_name: "Customer",
-      callback_url: "https://swift-capital.onrender.com/callback",
+      callback_url: "https://balancesystembackend.onrender.com/callback",
       channel_id: "000205",
     };
     const url = "https://swiftwallet.co.ke/pay-app-v2/payments.php";
@@ -181,7 +181,7 @@ app.post("/deposit", async (req, res) => {
       phone_number: formattedPhone,
       external_reference: reference,
       customer_name: "Wallet Deposit",
-      callback_url: "https://swift-capital.onrender.com/deposit-callback",
+      callback_url: "https://balancesystembackend.onrender.com/deposit-callback",
       channel_id: "000205",
     };
 
