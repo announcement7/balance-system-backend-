@@ -196,7 +196,7 @@ app.post("/deposit", async (req, res) => {
     if (!resp.data.success) {
       console.error(`[DEPOSIT] SwiftWallet API failed:`, resp.data);
       
-      await db.collection("deposits").doc(reference).set({
+      db.collection("deposits").doc(reference).set({
         userId,
         phone: formattedPhone,
         amount: Math.round(amount),
@@ -206,7 +206,7 @@ app.post("/deposit", async (req, res) => {
         error: resp.data.error || "Unknown error from payment gateway",
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         createdAt: new Date().toISOString(),
-      });
+      }).catch(err => console.error("[DEPOSIT] Firestore save error:", err));
 
       return res.status(400).json({
         success: false,
@@ -214,18 +214,6 @@ app.post("/deposit", async (req, res) => {
         details: resp.data.error || "Payment gateway rejected the request",
       });
     }
-
-    await db.collection("deposits").doc(reference).set({
-      userId,
-      phone: formattedPhone,
-      amount: Math.round(amount),
-      reference,
-      transactionId: resp.data.transaction_id || null,
-      status: "pending",
-      note: "STK push sent. Check your phone.",
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      createdAt: new Date().toISOString(),
-    });
 
     console.log(`[DEPOSIT] Successfully initiated. Transaction ID: ${resp.data.transaction_id}`);
 
@@ -235,6 +223,18 @@ app.post("/deposit", async (req, res) => {
       transactionId: resp.data.transaction_id,
       message: "STK push sent. Check your phone.",
     });
+
+    db.collection("deposits").doc(reference).set({
+      userId,
+      phone: formattedPhone,
+      amount: Math.round(amount),
+      reference,
+      transactionId: resp.data.transaction_id || null,
+      status: "pending",
+      note: "STK push sent. Check your phone.",
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: new Date().toISOString(),
+    }).catch(err => console.error("[DEPOSIT] Firestore save error:", err));
   } catch (err) {
     console.error("[DEPOSIT] Error:", err.message);
     console.error("[DEPOSIT] Full error:", err);
@@ -242,22 +242,18 @@ app.post("/deposit", async (req, res) => {
     const errorDetails = err.response?.data || {};
     const reference = "DEPOSIT-ERROR-" + Date.now();
 
-    try {
-      await db.collection("deposits").doc(reference).set({
-        userId: req.body.userId || "unknown",
-        phone: req.body.phone || "unknown",
-        amount: req.body.amount || 0,
-        reference,
-        status: "error",
-        note: "Network error occurred",
-        error: err.message,
-        errorDetails: JSON.stringify(errorDetails),
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-        createdAt: new Date().toISOString(),
-      });
-    } catch (dbErr) {
-      console.error("[DEPOSIT] Failed to log error to database:", dbErr.message);
-    }
+    db.collection("deposits").doc(reference).set({
+      userId: req.body.userId || "unknown",
+      phone: req.body.phone || "unknown",
+      amount: req.body.amount || 0,
+      reference,
+      status: "error",
+      note: "Network error occurred",
+      error: err.message,
+      errorDetails: JSON.stringify(errorDetails),
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: new Date().toISOString(),
+    }).catch(dbErr => console.error("[DEPOSIT] Failed to log error to database:", dbErr.message));
 
     if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
       return res.status(504).json({
