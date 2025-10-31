@@ -280,16 +280,22 @@ app.post("/deposit", async (req, res) => {
 app.post("/deposit-callback", async (req, res) => {
   try {
     const data = req.body;
-    console.log("[CALLBACK] Received deposit callback:", JSON.stringify(data));
+    console.log("[CALLBACK] ===== DEPOSIT CALLBACK RECEIVED =====");
+    console.log("[CALLBACK] Full payload:", JSON.stringify(data, null, 2));
 
     const ref = data.external_reference;
     if (!ref) {
-      console.error("[CALLBACK] Missing external_reference in callback");
+      console.error("[CALLBACK] ERROR: Missing external_reference in callback");
+      console.log("[CALLBACK] Received data keys:", Object.keys(data));
       return res.status(400).json({ error: "Missing reference" });
     }
 
+    console.log(`[CALLBACK] Processing reference: ${ref}`);
+
     const resultCode = data.result?.ResultCode;
     const success = (data.status === "completed" && data.success === true) || resultCode === 0;
+
+    console.log(`[CALLBACK] Success check: status=${data.status}, success=${data.success}, resultCode=${resultCode}, isSuccess=${success}`);
 
     let depositStatus = "failed";
     let note = "Deposit failed.";
@@ -299,29 +305,37 @@ app.post("/deposit-callback", async (req, res) => {
       depositStatus = "success";
       note = "Deposit successful. Balance updated.";
       mpesaReceiptNumber = data.result?.MpesaReceiptNumber || null;
+      console.log(`[CALLBACK] ✅ Payment SUCCESS - Receipt: ${mpesaReceiptNumber}`);
     } else if (resultCode === 1032) {
       depositStatus = "cancelled";
       note = "You cancelled the payment request.";
+      console.log("[CALLBACK] ❌ Payment CANCELLED by user");
     } else if (resultCode === 1037) {
       depositStatus = "timeout";
       note = "Request timed out. No PIN entered.";
+      console.log("[CALLBACK] ⏱️ Payment TIMEOUT");
     } else if (resultCode === 2001) {
       depositStatus = "insufficient_balance";
       note = "Insufficient M-Pesa balance.";
+      console.log("[CALLBACK] 💰 INSUFFICIENT BALANCE");
     } else {
       note = data.result?.ResultDesc || "Deposit failed or cancelled.";
+      console.log(`[CALLBACK] ⚠️ Payment FAILED: ${note}`);
     }
 
+    console.log(`[CALLBACK] Looking for deposit document: ${ref}`);
     const depositRef = db.collection("deposits").doc(ref);
     const depositSnap = await depositRef.get();
 
     if (!depositSnap.exists) {
-      console.error(`[CALLBACK] Deposit reference not found: ${ref}`);
+      console.error(`[CALLBACK] ERROR: Deposit reference not found in Firestore: ${ref}`);
+      console.error("[CALLBACK] This means the initial /deposit call didn't save to Firestore");
       return res.status(404).json({ error: "Reference not found" });
     }
 
     const depositData = depositSnap.data();
-    console.log(`[CALLBACK] Updating deposit ${ref} to status: ${depositStatus}`);
+    console.log(`[CALLBACK] Found deposit: userId=${depositData.userId}, amount=${depositData.amount}`);
+    console.log(`[CALLBACK] Updating deposit status to: ${depositStatus}`);
 
     await depositRef.update({
       status: depositStatus,
@@ -332,13 +346,17 @@ app.post("/deposit-callback", async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    console.log("[CALLBACK] ✅ Deposit document updated successfully");
+
     if (depositStatus === "success") {
-      console.log(`[CALLBACK] Processing successful deposit for user: ${depositData.userId}`);
+      console.log(`[CALLBACK] 💰 Processing balance update for user: ${depositData.userId}`);
       
       const userRef = db.collection("users").doc(depositData.userId);
       const userSnap = await userRef.get();
       const currentBalance = userSnap.exists ? userSnap.data().balance || 0 : 0;
       const newBalance = currentBalance + depositData.amount;
+
+      console.log(`[CALLBACK] Current balance: ${currentBalance}, Adding: ${depositData.amount}, New balance: ${newBalance}`);
 
       await userRef.set(
         {
@@ -350,7 +368,7 @@ app.post("/deposit-callback", async (req, res) => {
         { merge: true }
       );
 
-      console.log(`[CALLBACK] Balance updated: ${currentBalance} -> ${newBalance} for user ${depositData.userId}`);
+      console.log(`[CALLBACK] ✅ BALANCE UPDATED: ${currentBalance} → ${newBalance} for user ${depositData.userId}`);
 
       await db.collection("receipts").add({
         userId: depositData.userId,
@@ -364,7 +382,11 @@ app.post("/deposit-callback", async (req, res) => {
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         createdAt: new Date().toISOString(),
       });
+
+      console.log("[CALLBACK] ✅ Receipt created");
     } else {
+      console.log(`[CALLBACK] Skipping balance update (status: ${depositStatus})`);
+      
       await db.collection("receipts").add({
         userId: depositData.userId,
         type: "deposit",
@@ -376,12 +398,18 @@ app.post("/deposit-callback", async (req, res) => {
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         createdAt: new Date().toISOString(),
       });
+
+      console.log("[CALLBACK] ✅ Failed receipt created");
     }
 
+    console.log("[CALLBACK] ===== CALLBACK PROCESSED SUCCESSFULLY =====");
     res.json({ ResultCode: 0, ResultDesc: "Deposit callback handled successfully" });
   } catch (err) {
-    console.error("[CALLBACK] Error processing callback:", err.message);
-    res.status(500).json({ error: "Callback processing failed" });
+    console.error("[CALLBACK] ❌❌❌ CRITICAL ERROR ❌❌❌");
+    console.error("[CALLBACK] Error message:", err.message);
+    console.error("[CALLBACK] Error stack:", err.stack);
+    console.error("[CALLBACK] Error details:", JSON.stringify(err, null, 2));
+    res.status(500).json({ error: "Callback processing failed", details: err.message });
   }
 });
 
@@ -449,6 +477,81 @@ app.get("/receipt/:reference", async (req, res) => {
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+app.get("/test-firestore", async (req, res) => {
+  try {
+    console.log("[TEST] Testing Firestore connection...");
+    
+    const testRef = db.collection("_test").doc("connection-test");
+    await testRef.set({
+      test: true,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      message: "Firestore is working!"
+    });
+    
+    const testSnap = await testRef.get();
+    const data = testSnap.data();
+    
+    await testRef.delete();
+    
+    console.log("[TEST] ✅ Firestore working!");
+    
+    res.json({
+      success: true,
+      message: "Firestore connection successful",
+      data: data,
+      firebase_config: {
+        projectId: process.env.FIREBASE_PROJECT_ID || "MISSING",
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL ? "SET" : "MISSING",
+        privateKey: process.env.FIREBASE_PRIVATE_KEY ? "SET" : "MISSING"
+      }
+    });
+  } catch (err) {
+    console.error("[TEST] ❌ Firestore error:", err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      firebase_config: {
+        projectId: process.env.FIREBASE_PROJECT_ID || "MISSING",
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL ? "SET" : "MISSING",
+        privateKey: process.env.FIREBASE_PRIVATE_KEY ? "SET" : "MISSING"
+      }
+    });
+  }
+});
+
+app.get("/debug-deposit/:reference", async (req, res) => {
+  try {
+    const { reference } = req.params;
+    console.log(`[DEBUG] Checking deposit: ${reference}`);
+    
+    const depositSnap = await db.collection("deposits").doc(reference).get();
+    
+    if (!depositSnap.exists) {
+      return res.json({
+        found: false,
+        message: "Deposit not found in Firestore",
+        reference: reference
+      });
+    }
+    
+    const data = depositSnap.data();
+    console.log("[DEBUG] Deposit data:", JSON.stringify(data, null, 2));
+    
+    const userSnap = await db.collection("users").doc(data.userId).get();
+    const userData = userSnap.exists ? userSnap.data() : null;
+    
+    res.json({
+      found: true,
+      deposit: data,
+      user: userData,
+      userExists: userSnap.exists
+    });
+  } catch (err) {
+    console.error("[DEBUG] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
